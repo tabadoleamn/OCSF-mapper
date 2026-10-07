@@ -1,0 +1,150 @@
+{
+  "source_name": "sdwan_ids_alert",
+  "display_name": "SD-WAN IDS Alert",
+  "vendor": "Unknown",
+  "priority": "critical",
+  "description": "Signature-based network security detection received from the SD-WAN log source.",
+  "mapping_version": "1.0.0",
+  "parser": "json",
+
+  "routing": {
+    "field": "$.message",
+    "rules": [
+      {
+        "default": true,
+        "class": "detection_finding"
+      }
+    ]
+  },
+
+  "classes": {
+    "detection_finding": {
+      "mapping": {
+
+        "metadata.version": {
+          "const": "1.9.0"
+        },
+
+        "metadata.product.name": {
+          "const": "Unknown"
+        },
+
+        "metadata.product.vendor_name": {
+          "const": "Unknown"
+        },
+
+        "metadata.uid": {
+          "path": "$.id"
+        },
+
+        "metadata.log_format": {
+          "const": "syslog"
+        },
+
+        "metadata.log_provider": {
+          "const": "SyslogGen"
+        },
+
+        "metadata.source": {
+          "path": "$.siem_sensor"
+        },
+
+        "time": {
+          "syslog_alert_time": "$.message"
+        },
+
+        "category_uid": {
+          "const": 2
+        },
+
+        "category_name": {
+          "const": "Findings"
+        },
+
+        "class_uid": {
+          "const": 2004
+        },
+
+        "class_name": {
+          "const": "Detection Finding"
+        },
+
+        "activity_id": {
+          "const": 1
+        },
+
+        "activity_name": {
+          "const": "Create"
+        },
+
+        "type_uid": {
+          "const": 200401
+        },
+
+        "type_name": {
+          "const": "Detection Finding: Create"
+        },
+
+        "severity_id": {
+          "const": 0
+        },
+
+        "severity": {
+          "const": "Unknown"
+        },
+
+        "is_alert": {
+          "const": true
+        },
+
+        "finding_info.uid": {
+          "path": "$.id"
+        },
+
+        "finding_info.title": {
+          "syslog_alert_classification": "$.message"
+        },
+
+        "finding_info.desc": {
+          "syslog_alert_description": "$.message"
+        },
+
+        "evidences": {
+          "syslog_alert_evidences": "$.message"
+        },
+
+
+
+        "unmapped.sdwan": {
+          "syslog_alert_original_fields": "$.message"
+        },
+
+
+
+        "unmapped.collector.host_ip": {
+          "path": "$.host_ip"
+        },
+
+        "unmapped.collector.src_ip": {
+          "path": "$.src_ip"
+        },
+
+        "unmapped.collector.dst_ip": {
+          "path": "$.dst_ip"
+        },
+
+        "unmapped.collector.src_port": {
+          "path": "$.src_port"
+        },
+
+        "unmapped.collector.dst_port": {
+          "path": "$.dst_port"
+        },
+
+        "raw_data": {
+          "raw": true
+        }
+      }
+    }
+  }
+}

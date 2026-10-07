@@ -1,0 +1,151 @@
+{
+  "source_name": "multi_antivirus",
+  "display_name": "Multi Anti Virus Scanner",
+  "vendor": "Multi_Anti_Virus",
+  "priority": "critical",
+  "description": "Antivirus and malware scanning findings for files and affected hosts.",
+  "mapping_version": "1.0.0",
+  "parser": "json",
+
+  "routing": {
+    "field": "$.siem_sensor",
+    "rules": [
+      {
+        "default": true,
+        "class": "detection_finding"
+      }
+    ]
+  },
+
+  "classes": {
+    "detection_finding": {
+      "mapping": {
+
+        "metadata.version": {
+          "const": "1.9.0"
+        },
+
+        "metadata.product.name": {
+          "const": "Multi Anti Virus Scanner"
+        },
+
+        "metadata.product.vendor_name": {
+          "const": "Multi_Anti_Virus"
+        },
+
+        "metadata.uid": {
+          "path": "$.id"
+        },
+
+        "metadata.log_provider": {
+          "path": "$.siem_sensor"
+        },
+
+        "time": {
+          "time": "$.Scan_DateTime",
+          "format": "strptime:%Y-%m-%d %H:%M:%S"
+        },
+
+        "category_uid": {
+          "const": 2
+        },
+
+        "category_name": {
+          "const": "Findings"
+        },
+
+        "class_uid": {
+          "const": 2004
+        },
+
+        "class_name": {
+          "const": "Detection Finding"
+        },
+
+        "activity_id": {
+          "const": 1
+        },
+
+        "activity_name": {
+          "const": "Create"
+        },
+
+        "type_uid": {
+          "const": 200401
+        },
+
+        "type_name": {
+          "const": "Detection Finding: Create"
+        },
+
+        "severity_id": {
+          "multi_antivirus_severity_id": "$"
+        },
+
+        "severity": {
+          "multi_antivirus_severity": "$"
+        },
+
+        "status_id": {
+          "const": 1
+        },
+
+        "status": {
+          "const": "New"
+        },
+
+        "is_alert": {
+          "multi_antivirus_is_alert": "$"
+        },
+
+        "finding_info.uid": {
+          "to_string": "$.id"
+        },
+
+        "finding_info.title": {
+          "multi_antivirus_finding_title": "$"
+        },
+
+        "evidences": {
+          "multi_antivirus_evidences": "$"
+        },
+
+        "device": {
+          "multi_antivirus_affected_device": "$"
+        },
+
+        "malware_scan_info": {
+          "multi_antivirus_scan_info": "$"
+        },
+
+        "unmapped.multi_antivirus": {
+          "multi_antivirus_unmapped": "$"
+        },
+
+        "unmapped.collector.host_ip": {
+          "path": "$.host_ip"
+        },
+
+        "unmapped.collector.src_ip": {
+          "path": "$.src_ip"
+        },
+
+        "unmapped.collector.dst_ip": {
+          "path": "$.dst_ip"
+        },
+
+        "unmapped.collector.src_port": {
+          "path": "$.src_port"
+        },
+
+        "unmapped.collector.dst_port": {
+          "path": "$.dst_port"
+        },
+
+        "raw_data": {
+          "raw": true
+        }
+      }
+    }
+  }
+}
