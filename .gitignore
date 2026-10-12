@@ -9,3 +9,4 @@ ocsf_sample_system_activity.json
 prompts.py
 tools.py
 top5_jsons.py
+raw & ocsf logs/

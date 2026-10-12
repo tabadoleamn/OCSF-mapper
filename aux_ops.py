@@ -17,13 +17,541 @@ from __future__ import annotations
 
 import ntpath
 from typing import Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import re
+import ipaddress
 
 
 
+_PROTOCOL_NUMBERS = {
+    "icmp": 1,
+    "tcp": 6,
+    "udp": 17,
+    "ipv6-icmp": 58,
+    "icmpv6": 58,
+}
 
 
+# *********************************************************
+def _clean_string(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    value = str(value).strip()
+
+    if not value:
+        return None
+
+    if value.lower() in {
+        "null",
+        "none",
+        "nil",
+        "-"
+    }:
+        return None
+
+    return value
+
+
+def _safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_sysmon_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return value
+
+    value = str(value).strip().lower()
+
+    if value in {
+        "true",
+        "1",
+        "yes",
+        "y"
+    }:
+        return True
+
+    if value in {
+        "false",
+        "0",
+        "no",
+        "n"
+    }:
+        return False
+
+    return None
+
+
+def _sysmon_event_id(
+    record: dict[str, Any],
+) -> int | None:
+    try:
+        return int(record.get("EventID"))
+    except (TypeError, ValueError):
+        return None
+
+
+# ********************************************************
+
+def sysmon_network_activity_name(
+    record: dict[str, Any],
+) -> str:
+
+    event_id = _sysmon_event_id(record)
+
+    if event_id is None:
+        return "Unknown"
+
+    if event_id == 3:
+        return "Open"
+
+    category = _clean_string(
+        record.get("Category")
+    )
+
+    if category:
+        return category
+
+    return f"Sysmon Event {event_id}"
+
+# *****************************************************
+
+def sysmon_network_type_name(
+    record: dict[str, Any],
+) -> str:
+
+    activity_name = (
+        sysmon_network_activity_name(record)
+    )
+
+    return (
+        f"Network Activity: {activity_name}"
+    )
+
+# *********************************************************
+
+def _sysmon_network_raw_severity(
+    record: dict[str, Any],
+) -> Any:
+
+    for field in (
+        "Severity",
+        "EventType",
+        "Level",
+    ):
+        value = record.get(field)
+
+        if value is not None:
+            if isinstance(value, str):
+                if value.strip():
+                    return value
+            else:
+                return value
+
+    return None
+
+# *******************************************************
+
+def sysmon_network_severity_id(
+    record: dict[str, Any],
+) -> int:
+
+    value = _sysmon_network_raw_severity(
+        record
+    )
+
+    # Native Sysmon Event ID 3 is Informational.
+    if value is None:
+        if _sysmon_event_id(record) == 3:
+            return 1
+
+        return 0
+
+    # Windows Event Level numeric values.
+    if isinstance(value, int):
+        windows_level_map = {
+            1: 5,  # Critical
+            2: 4,  # Error -> High
+            3: 3,  # Warning -> Medium
+            4: 1,  # Information
+            5: 1,  # Verbose
+        }
+
+        return windows_level_map.get(
+            value,
+            99
+        )
+
+    value = str(value).strip().lower()
+
+    table = {
+        "debug": 1,
+        "verbose": 1,
+
+        "info": 1,
+        "information": 1,
+        "informational": 1,
+
+        "low": 2,
+
+        "warn": 3,
+        "warning": 3,
+        "medium": 3,
+
+        "error": 4,
+        "high": 4,
+
+        "critical": 5,
+
+        "fatal": 6,
+    }
+
+    return table.get(
+        value,
+        99
+    )
+
+# ************************************************************
+
+def sysmon_network_severity(
+    record: dict[str, Any],
+) -> str:
+
+    severity_id = (
+        sysmon_network_severity_id(record)
+    )
+
+    canonical = {
+        0: "Unknown",
+        1: "Informational",
+        2: "Low",
+        3: "Medium",
+        4: "High",
+        5: "Critical",
+        6: "Fatal",
+    }
+
+    if severity_id != 99:
+        return canonical[severity_id]
+
+    raw = _sysmon_network_raw_severity(
+        record
+    )
+
+    if raw is None:
+        return "Other"
+
+    return str(raw).strip()
+
+# ****************************************************
+
+def sysmon_network_status_id(
+    record: dict[str, Any],
+) -> int:
+
+    value = _clean_string(
+        record.get("Status")
+    )
+
+    if value is None:
+        return 0
+
+    normalized = value.lower()
+
+    if normalized in {
+        "success",
+        "successful",
+        "succeeded",
+        "ok",
+        "allowed"
+    }:
+        return 1
+
+    if normalized in {
+        "failure",
+        "failed",
+        "error",
+        "denied",
+        "blocked",
+        "refused",
+        "timeout"
+    }:
+        return 2
+
+    return 99
+
+# ************************************************************
+
+def sysmon_network_status(
+    record: dict[str, Any],
+) -> str:
+
+    status_id = (
+        sysmon_network_status_id(record)
+    )
+
+    if status_id == 0:
+        return "Unknown"
+
+    if status_id == 1:
+        return "Success"
+
+    if status_id == 2:
+        return "Failure"
+
+    value = _clean_string(
+        record.get("Status")
+    )
+
+    return value or "Other"
+
+# ****************************************************
+
+def sysmon_utc_time(value: Any) -> int | None:
+    """Parse Sysmon UtcTime as UTC, independently of the machine timezone."""
+    value = _clean_string(value)
+    if value is None:
+        return None
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
+def sysmon_collector_logged_time(record: dict[str, Any]) -> int | None:
+    """Only normalize collector receipt time with a known timezone."""
+    value = _clean_string(record.get("EventReceivedTime"))
+    if value is None:
+        return None
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        offset = record.get("_collector_timezone_offset_minutes")
+        if offset is None:
+            return None
+        dt = dt.replace(tzinfo=timezone(timedelta(minutes=offset)))
+    return int(dt.timestamp() * 1000)
+
+
+def sysmon_network_actor(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Host-profile actor; ProcessID is the provider PID, not ProcessId."""
+    process: dict[str, Any] = {}
+    image = _clean_string(record.get("Image"))
+    if image:
+        process["name"] = ntpath.basename(image)
+        process["path"] = image
+    guid = _clean_string(record.get("ProcessGuid"))
+    if guid:
+        process["uid"] = guid
+    pid = _safe_int(record.get("ProcessId"))
+    if pid is not None and pid >= 0:
+        process["pid"] = pid
+    # OCSF process requires a pid, uid, or cpid; preserve image-only data in unmapped.
+    if "pid" not in process and "uid" not in process:
+        process = {}
+    user = windows_domain_user(_clean_string(record.get("User")))
+    actor: dict[str, Any] = {}
+    if user:
+        actor["user"] = user
+        if process:
+            process["user"] = user.copy()
+    if process:
+        actor["process"] = process
+    return actor or None
+
+
+def _sysmon_observer_matches(record: dict[str, Any]) -> tuple[bool, bool, bool]:
+    """Return source match, destination match, and conflicting evidence."""
+    def ip_value(value: Any) -> str | None:
+        value = _clean_string(value)
+        if value is None:
+            return None
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            return None
+
+    def host_value(value: Any) -> str | None:
+        value = _clean_string(value)
+        return value.rstrip(".").casefold() if value else None
+
+    source_match = destination_match = conflict = False
+    pairs = [
+        (ip_value(record.get("host_ip")), ip_value(record.get("SourceIp")),
+         ip_value(record.get("DestinationIp"))),
+        (host_value(record.get("Hostname")) or host_value(record.get("Computer")),
+         host_value(record.get("SourceHostname")),
+         host_value(record.get("DestinationHostname"))),
+    ]
+    for host, source, destination in pairs:
+        if host is None or (source is None and destination is None):
+            continue
+        source_hit = source is not None and host == source
+        destination_hit = destination is not None and host == destination
+        source_match |= source_hit
+        destination_match |= destination_hit
+        conflict |= not source_hit and not destination_hit
+    # Different evidence assigning the observer to opposite endpoints conflicts,
+    # except when an individual comparison actually matches both (loopback).
+    both_in_one = any(h is not None and h == a == b for h, a, b in pairs)
+    conflict |= source_match and destination_match and not both_in_one
+    return source_match, destination_match, conflict
+
+
+def sysmon_network_device(
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+
+    result: dict[str, Any] = {}
+
+    hostname = _clean_string(
+        record.get("Hostname")
+    ) or _clean_string(
+        record.get("Computer")
+    )
+
+    host_ip = _clean_string(
+        record.get("host_ip")
+    )
+
+    if hostname:
+        result["hostname"] = hostname
+
+    if host_ip:
+        result["ip"] = host_ip
+
+    if result:
+        result.update({"type_id": 0, "type": "Unknown"})
+    return result or None
+
+
+# *************************************************************
+
+def _infer_ip_version(
+    record: dict[str, Any],
+) -> int:
+
+    source_ipv6 = _parse_sysmon_bool(
+        record.get("SourceIsIpv6")
+    )
+
+    destination_ipv6 = _parse_sysmon_bool(
+        record.get("DestinationIsIpv6")
+    )
+
+    if (
+        source_ipv6 is True
+        or destination_ipv6 is True
+    ):
+        return 6
+
+    if (
+        source_ipv6 is False
+        and destination_ipv6 is False
+    ):
+        return 4
+
+    versions: set[int] = set()
+
+    for field in (
+        "SourceIp",
+        "DestinationIp",
+    ):
+        value = _clean_string(
+            record.get(field)
+        )
+
+        if not value:
+            continue
+
+        try:
+            versions.add(
+                ipaddress.ip_address(value).version
+            )
+        except ValueError:
+            continue
+
+    if len(versions) == 1:
+        return next(iter(versions))
+
+    return 0
+
+
+# ******************************************************
+
+def sysmon_source_endpoint(
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+
+    endpoint: dict[str, Any] = {}
+
+    hostname = _clean_string(
+        record.get("SourceHostname")
+    )
+
+    ip = _clean_string(
+        record.get("SourceIp")
+    )
+
+    port = _safe_int(
+        record.get("SourcePort")
+    )
+
+
+    if hostname:
+        endpoint["hostname"] = hostname
+
+    if ip:
+        endpoint["ip"] = ip
+
+    if port is not None and 0 <= port <= 65535:
+        endpoint["port"] = port
+
+
+    # A port alone does not satisfy the OCSF endpoint identity constraint.
+    return endpoint if hostname or ip else None
+
+# ***************************************************
+
+def sysmon_destination_endpoint(
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+
+    endpoint: dict[str, Any] = {}
+
+    hostname = _clean_string(
+        record.get("DestinationHostname")
+    )
+
+    ip = _clean_string(
+        record.get("DestinationIp")
+    )
+
+    port = _safe_int(
+        record.get("DestinationPort")
+    )
+
+
+    if hostname:
+        endpoint["hostname"] = hostname
+
+    if ip:
+        endpoint["ip"] = ip
+
+    if port is not None and 0 <= port <= 65535:
+        endpoint["port"] = port
+
+
+    # A port alone does not satisfy the OCSF endpoint identity constraint.
+    return endpoint if hostname or ip else None
 
 # ****************************************************
 def sysmon_windows_resource(
@@ -157,50 +685,196 @@ def sysmon_driver(
 
 
 # ***************************************************************
-def sysmon_service(
-    record: dict[str, Any],
-) -> dict[str, Any]:
-
-    return {
-        "name": "Sysmon",
-        "service_category_id": 0
-    }
+def sysmon_service(record: dict[str, Any]) -> dict[str, Any]:
+    """Required Windows service object; native ID 4 describes Sysmon's service."""
+    name = _clean_string(record.get("ServiceName"))
+    result: dict[str, Any] = {"name": name or "Sysmon"}
+    # Sysmon is a user-mode Windows service, accompanied by a separate driver.
+    # Unknown is used outside its documented service-state event.
+    category_id = 2 if _sysmon_event_id(record) == 4 else 0
+    result.update({"service_category_id": category_id,
+                   "service_category": {0: "Unknown", 2: "User Mode"}[category_id]})
+    # Populate optional properties only from explicit service-specific fields.
+    for source, target in {
+        "ServiceCommandLine": "cmd_line",
+        "ServiceStartName": "service_start_name",
+        "ServiceLoadOrderGroup": "load_order_group",
+    }.items():
+        value = _clean_string(record.get(source))
+        if value is not None:
+            result[target] = value
+    return result
 
 
 # *******************************************************
-def sysmon_service_activity_name(
-    record: dict[str, Any],
-) -> str:
-
-    activity_id = sysmon_service_activity_id(
-        record
-    )
-
-    return {
-        3: "Start",
-        4: "Stop",
-    }.get(
-        activity_id,
-        "Other",
-    )
+def sysmon_service_activity_name(record: dict[str, Any]) -> str:
+    activity = sysmon_service_activity_id(record)
+    if activity == 99:
+        return _clean_string(record.get("State")) or "Other"
+    return {0: "Unknown", 3: "Start", 4: "Stop"}[activity]
 
 
 # ***********************************************************************
-def sysmon_service_activity_id(
+def sysmon_service_activity_id(record: dict[str, Any]) -> int:
+    """Sysmon ID 4 reports state changes, not service installation/deletion."""
+    state = _clean_string(record.get("State"))
+    if state is None:
+        return 0
+    # Exact matching avoids treating 'not started' or 'restart failed' as Start.
+    return {"started": 3, "start": 3, "running": 3,
+            "stopped": 4, "stop": 4}.get(state.casefold(), 99)
+
+
+# ******************************************************************
+
+def sysmon_service_type_uid(record: dict[str, Any]) -> int:
+    # Calculate in the custom stage together with activity_id.
+    return 201004 * 100 + sysmon_service_activity_id(record)
+
+
+def sysmon_service_type_name(record: dict[str, Any]) -> str:
+    return "Windows Service Activity: " + sysmon_service_activity_name(record)
+
+
+def sysmon_service_severity_id(record: dict[str, Any]) -> int:
+    if _sysmon_network_raw_severity(record) is None:
+        return 1 if _sysmon_event_id(record) == 4 else 0
+    return sysmon_network_severity_id(record)
+
+
+def sysmon_service_severity(record: dict[str, Any]) -> str:
+    severity_id = sysmon_service_severity_id(record)
+    captions = {0: "Unknown", 1: "Informational", 2: "Low", 3: "Medium",
+                4: "High", 5: "Critical", 6: "Fatal"}
+    return captions.get(severity_id, str(_sysmon_network_raw_severity(record)).strip())
+
+
+def sysmon_service_product_version(record: dict[str, Any]) -> str | None:
+    # Native ID 4 Version is the Sysmon binary version; a collector may instead
+    # expose the numeric event-header version under the same flat key.
+    value = _clean_string(record.get("SysmonVersion") or record.get("Version"))
+    return value if value and re.fullmatch(r"\d+(?:\.\d+)+", value) else None
+
+
+def sysmon_service_actor(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Use explicit initiator enrichment only; provider PID/account is not proof."""
+    return sysmon_network_actor({
+        "ProcessId": record.get("ActorProcessId"),
+        "ProcessGuid": record.get("ActorProcessGuid"),
+        "Image": record.get("ActorImage"),
+        "User": record.get("ActorUser"),
+    })
+
+
+def sysmon_error_message(record: dict[str, Any]) -> str | None:
+    return _clean_string(record.get("Message")) or _clean_string(record.get("Description"))
+
+
+def sysmon_connection_info(
     record: dict[str, Any],
-) -> int:
+) -> dict[str, Any]:
 
-    state = str(
-        record.get("State", "")
-    ).strip().lower()
+    result: dict[str, Any] = {
+        # Required by OCSF network_connection_info.
+        # Sysmon alone does not tell us
+        # Internal/External/Lateral boundary direction.
+        "direction_id": 0,
+        "direction": "Unknown",
+    }
 
-    if "start" in state:
-        return 3
+    protocol = _clean_string(
+        record.get("Protocol")
+    )
 
-    if "stop" in state:
+    if protocol:
+        normalized = protocol.lower()
+
+        result["protocol_name"] = normalized
+
+        protocol_num = _PROTOCOL_NUMBERS.get(
+            normalized
+        )
+
+        if protocol_num is not None:
+            result["protocol_num"] = protocol_num
+
+    ip_version = _infer_ip_version(record)
+
+    result["protocol_ver_id"] = ip_version
+
+    if ip_version == 4:
+        result["protocol_ver"] = (
+            "Internet Protocol version 4 (IPv4)"
+        )
+
+    elif ip_version == 6:
+        result["protocol_ver"] = (
+            "Internet Protocol version 6 (IPv6)"
+        )
+
+    else:
+        result["protocol_ver"] = "Unknown"
+
+    return result
+
+# *********************************************************************
+
+def sysmon_network_initiator_id(record: dict[str, Any]) -> int:
+    if _sysmon_event_id(record) != 3:
+        return 0
+    source, destination, conflict = _sysmon_observer_matches(record)
+    initiated = _parse_sysmon_bool(record.get("Initiated"))
+    if conflict or source == destination or initiated is None:
+        return 0
+    # Initiated describes the local process. Relate that host to the endpoints.
+    if source:
+        return 1 if initiated else 2
+    return 2 if initiated else 1
+
+# *******************************************************************
+
+def sysmon_network_initiator(record: dict[str, Any]) -> str:
+    return {0: "Unknown", 1: "Source Endpoint", 2: "Destination Endpoint"}[
+        sysmon_network_initiator_id(record)
+    ]
+
+# ***********************************************************
+
+def sysmon_network_observation_point_id(record: dict[str, Any]) -> int:
+    source, destination, conflict = _sysmon_observer_matches(record)
+    if conflict:
+        return 0
+    if source and destination:
         return 4
+    if source:
+        return 1
+    if destination:
+        return 2
+    # Initiated alone cannot establish where the observer sits in the mapped
+    # endpoints. Keep Unknown when direct host evidence is unavailable.
+    return 0
 
-    return 99
+# ********************************************************
+
+def sysmon_network_observation_point(
+    record: dict[str, Any],
+) -> str:
+
+    observation_id = (
+        sysmon_network_observation_point_id(
+            record
+        )
+    )
+
+    return {
+        0: "Unknown",
+        1: "Source",
+        2: "Destination",
+        3: "Neither",
+        4: "Both",
+        99: "Other",
+    }[observation_id]
+
 
 # **********************************************************************************************
 def multi_antivirus_unmapped(
@@ -1059,7 +1733,71 @@ def sysmon_hashes_to_ocsf_fingerprints(value: Any) -> list[dict[str, Any]] | Non
 # Dispatcher
 # ---------------------------------------------------------------------------
 
+
+# Temporary placeholders: implement these Sysmon transformations later.
+
+def sysmon_actor(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_actor; omit this field for now."""
+    return None
+
+
+def sysmon_clipboard(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_clipboard; omit this field for now."""
+    return None
+
+
+def sysmon_current_process(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_current_process; omit this field for now."""
+    return None
+
+
+def sysmon_registry_key(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_registry_key; omit this field for now."""
+    return None
+
+
+def sysmon_registry_key_activity_id(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_registry_key_activity_id; omit this field for now."""
+    return None
+
+
+def sysmon_registry_key_activity_name(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_registry_key_activity_name; omit this field for now."""
+    return None
+
+
+def sysmon_registry_value(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_registry_value; omit this field for now."""
+    return None
+
+
+def sysmon_registry_value_activity_id(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_registry_value_activity_id; omit this field for now."""
+    return None
+
+
+def sysmon_registry_value_activity_name(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_registry_value_activity_name; omit this field for now."""
+    return None
+
+
+def sysmon_target_file(record: dict[str, Any]) -> None:
+    """TODO: implement sysmon_target_file; omit this field for now."""
+    return None
+
+
 CUSTOM_OPS = {
+    "sysmon_service_type_uid": sysmon_service_type_uid,
+    "sysmon_service_type_name": sysmon_service_type_name,
+    "sysmon_service_severity_id": sysmon_service_severity_id,
+    "sysmon_service_severity": sysmon_service_severity,
+    "sysmon_service_product_version": sysmon_service_product_version,
+    "sysmon_service_actor": sysmon_service_actor,
+    "sysmon_error_message": sysmon_error_message,
+
+    "sysmon_utc_time": sysmon_utc_time,
+    "sysmon_collector_logged_time": sysmon_collector_logged_time,
+    "sysmon_network_actor": sysmon_network_actor,
     "windows_basename": windows_basename,
     "windows_dirname": windows_dirname,
     "windows_domain_user": windows_domain_user,
@@ -1112,6 +1850,75 @@ CUSTOM_OPS.update(
         "multi_antivirus_unmapped": multi_antivirus_unmapped,
     }
 )
+
+
+CUSTOM_OPS.update(
+    {
+        "sysmon_network_activity_name":
+            sysmon_network_activity_name,
+
+        "sysmon_network_type_name":
+            sysmon_network_type_name,
+
+        "sysmon_network_severity_id":
+            sysmon_network_severity_id,
+
+        "sysmon_network_severity":
+            sysmon_network_severity,
+
+        "sysmon_network_status_id":
+            sysmon_network_status_id,
+
+        "sysmon_network_status":
+            sysmon_network_status,
+
+        "sysmon_network_device":
+            sysmon_network_device,
+
+        "sysmon_source_endpoint":
+            sysmon_source_endpoint,
+
+        "sysmon_destination_endpoint":
+            sysmon_destination_endpoint,
+
+        "sysmon_connection_info":
+            sysmon_connection_info,
+
+        "sysmon_network_initiator_id":
+            sysmon_network_initiator_id,
+
+        "sysmon_network_initiator":
+            sysmon_network_initiator,
+
+        "sysmon_network_observation_point_id":
+            sysmon_network_observation_point_id,
+
+        "sysmon_network_observation_point":
+            sysmon_network_observation_point,
+    }
+)
+
+# Register additional operations referenced by the Sysmon mapping.
+CUSTOM_OPS.update({
+    "sysmon_actor": sysmon_actor,
+    "sysmon_clipboard": sysmon_clipboard,
+    "sysmon_current_process": sysmon_current_process,
+    "sysmon_driver": sysmon_driver,
+    "sysmon_event_status_id": sysmon_event_status_id,
+    "sysmon_event_status_text": sysmon_event_status_text,
+    "sysmon_module": sysmon_module,
+    "sysmon_registry_key": sysmon_registry_key,
+    "sysmon_registry_key_activity_id": sysmon_registry_key_activity_id,
+    "sysmon_registry_key_activity_name": sysmon_registry_key_activity_name,
+    "sysmon_registry_value": sysmon_registry_value,
+    "sysmon_registry_value_activity_id": sysmon_registry_value_activity_id,
+    "sysmon_registry_value_activity_name": sysmon_registry_value_activity_name,
+    "sysmon_service": sysmon_service,
+    "sysmon_service_activity_id": sysmon_service_activity_id,
+    "sysmon_service_activity_name": sysmon_service_activity_name,
+    "sysmon_target_file": sysmon_target_file,
+    "sysmon_windows_resource": sysmon_windows_resource,
+})
 
 def apply_custom_op(
     op: dict[str, Any],
