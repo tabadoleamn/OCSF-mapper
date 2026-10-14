@@ -460,6 +460,12 @@
         "class_name": {
           "const": "Network Activity"
         },
+        "dst_endpoint.port": {
+          "int": "$.DestinationPort"
+        },
+        "dst_endpoint.svc_name": {
+          "path": "$.DestinationPortName"
+        },        
         "activity_id": {
           "lookup": "$.EventID",
           "table": {
@@ -520,6 +526,9 @@
         },
         "observation_point": {
           "sysmon_network_observation_point": "$"
+        },
+        "raw_data": {
+          "raw": true
         }
       }
     },
@@ -611,6 +620,7 @@
         "severity": {
           "sysmon_service_severity": "$"
         },
+                
         "status_id": {
           "sysmon_network_status_id": "$"
         },

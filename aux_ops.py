@@ -408,19 +408,16 @@ def _sysmon_observer_matches(record: dict[str, Any]) -> tuple[bool, bool, bool]:
 
 def sysmon_network_device(
     record: dict[str, Any],
+    sent_host_ip: str | None = "[ENR]",
 ) -> dict[str, Any] | None:
 
     result: dict[str, Any] = {}
 
-    hostname = _clean_string(
-        record.get("Hostname")
-    ) or _clean_string(
-        record.get("Computer")
+    hostname = (
+        _clean_string(record.get("Hostname"))
+        or _clean_string(record.get("Computer"))
     )
-
-    host_ip = _clean_string(
-        record.get("host_ip")
-    )
+    host_ip = _clean_string(sent_host_ip)
 
     if hostname:
         result["hostname"] = hostname
@@ -430,6 +427,7 @@ def sysmon_network_device(
 
     if result:
         result.update({"type_id": 0, "type": "Unknown"})
+
     return result or None
 
 

@@ -1,0 +1,376 @@
+--- previous/aux_ops.py
++++ aux_ops.py
+@@ -1781,12 +1781,164 @@
+     return None
+ 
+ 
+-def sysmon_target_file(record: dict[str, Any]) -> None:
+-    """TODO: implement sysmon_target_file; omit this field for now."""
+-    return None
++def sysmon_target_file(record: dict[str, Any]) -> dict[str, Any] | None:
++    return _sysmon_target_file(record)
++
++
++# Sysmon File System Activity (OCSF 1.9.0).
++_SYSMON_FILE_ACTIVITIES = {
++    # Native FileCreate (11) covers creation AND overwriting; do not guess which.
++    2: (6, "Set Attributes"), 11: (99, "FileCreate"), 15: (1, "Create"),
++    23: (4, "Delete"), 26: (4, "Delete"), 27: (1, "Create"),
++    # Shredding need not be a delete: do not invent the underlying I/O operation.
++    28: (99, "FileBlockShredding"), 29: (1, "Create"),
++}
++
++
++def sysmon_file_activity_id(record: dict[str, Any]) -> int:
++    event_id = _sysmon_event_id(record)
++    if event_id is None:
++        return 0
++    return _SYSMON_FILE_ACTIVITIES.get(event_id, (99, "Other"))[0]
++
++
++def sysmon_file_activity_name(record: dict[str, Any]) -> str:
++    event_id = _sysmon_event_id(record)
++    if event_id is None:
++        return "Unknown"
++    if event_id in _SYSMON_FILE_ACTIVITIES:
++        return _SYSMON_FILE_ACTIVITIES[event_id][1]
++    return _clean_string(record.get("Category")) or f"Sysmon Event {event_id}"
++
++
++def sysmon_file_type_uid(record: dict[str, Any]) -> int:
++    return 100100 + sysmon_file_activity_id(record)
++
++
++def sysmon_file_type_name(record: dict[str, Any]) -> str:
++    return "File System Activity: " + sysmon_file_activity_name(record)
++
++
++def _sysmon_file_severity_pair(record: dict[str, Any]) -> tuple[int, str]:
++    captions = {0: "Unknown", 1: "Informational", 2: "Low", 3: "Medium",
++                4: "High", 5: "Critical", 6: "Fatal"}
++    labels = {"debug": 1, "verbose": 1, "info": 1, "information": 1,
++              "informational": 1, "low": 2, "warn": 3, "warning": 3,
++              "medium": 3, "error": 4, "high": 4, "critical": 5, "fatal": 6}
++    for field in ("Severity", "EventType", "Level"):
++        value = _clean_string(record.get(field))
++        if value is None:
++            continue
++        severity_id = labels.get(value.casefold())
++        if severity_id is None and field == "Level" and value.isdecimal():
++            severity_id = {0: 0, 1: 5, 2: 4, 3: 3, 4: 1, 5: 1}.get(int(value))
++        if severity_id is None:
++            return 99, value
++        return severity_id, captions[severity_id]
++    return (1, "Informational") if _sysmon_event_id(record) in _SYSMON_FILE_ACTIVITIES else (0, "Unknown")
++
++
++def sysmon_file_severity_id(record: dict[str, Any]) -> int:
++    return _sysmon_file_severity_pair(record)[0]
++
++
++def sysmon_file_severity(record: dict[str, Any]) -> str:
++    return _sysmon_file_severity_pair(record)[1]
++
++
++def sysmon_file_status_id(record: dict[str, Any]) -> int:
++    event_id = _sysmon_event_id(record)
++    if event_id in {27, 28}:
++        return 2  # Failure of the requested file operation, not of Sysmon.
++    if _clean_string(record.get("Status")) is not None:
++        return sysmon_network_status_id(record)
++    # These native events report an observed change, creation or deletion.
++    return 1 if event_id in {2, 11, 15, 23, 26, 29} else 0
++
++
++def sysmon_file_status(record: dict[str, Any]) -> str:
++    status_id = sysmon_file_status_id(record)
++    if status_id == 99:
++        return _clean_string(record.get("Status")) or "Other"
++    return {0: "Unknown", 1: "Success", 2: "Failure"}[status_id]
++
++
++def sysmon_file_actor(record: dict[str, Any]) -> dict[str, Any] | None:
++    """Use the operation's ProcessId/ProcessGuid/User, never provider ProcessID."""
++    actor = sysmon_network_actor(record)
++    if actor and "process" in actor:
++        process = actor["process"]
++        image = process.get("path")
++        if image and ntpath.basename(image):
++            process["file"] = {"path": image, "name": ntpath.basename(image),
++                               "type_id": 8, "type": "Executable File"}
++        command_line = _clean_string(record.get("CommandLine"))
++        if command_line:
++            process["cmd_line"] = command_line
++    return actor
++
++
++def _sysmon_target_file(record: dict[str, Any], resulting: bool = False) -> dict[str, Any] | None:
++    path = _clean_string(record.get("TargetFilename"))
++    if not path or not ntpath.basename(path):
++        return None
++    event_id = _sysmon_event_id(record)
++    executable = event_id in {27, 29}
++    # Event 15 describes a named stream; an executable base file does not make
++    # its stream executable, and its Hash is the unnamed/base file's hash.
++    if event_id != 15:
++        executable = _parse_sysmon_bool(record.get("IsExecutable")) is True or executable
++    result: dict[str, Any] = {
++        "name": ntpath.basename(path), "path": path,
++        "type_id": 8 if executable else 1,
++        "type": "Executable File" if executable else "Regular File",
++    }
++    parent = ntpath.dirname(path)
++    if parent:
++        result["parent_folder"] = parent
++    if event_id != 15:
++        ext = ntpath.splitext(path)[1].lstrip(".")
++        if ext:
++            result["ext"] = ext
++        hashes = _clean_string(record.get("Hashes")) or _clean_string(record.get("Hash"))
++        if hashes:
++            fingerprints = sysmon_hashes_to_ocsf_fingerprints(hashes)
++            if fingerprints:
++                result["hashes"] = fingerprints
++    time_field = "PreviousCreationUtcTime" if event_id == 2 and not resulting else "CreationUtcTime"
++    created_time = sysmon_utc_time(record.get(time_field))
++    if created_time is not None:
++        result["created_time"] = created_time
++    size = _safe_int(record.get("FileSize"))
++    if size is not None and size >= 0:
++        result["size"] = size
++    if event_id in {23, 26} and sysmon_file_status_id(record) == 1:
++        result["is_deleted"] = True
++    return result
++
++
++def sysmon_file_result(record: dict[str, Any]) -> dict[str, Any] | None:
++    # Event 2 provides before/after creation timestamps. Other file events do
++    # not need a duplicate resulting object merely to add more fields.
++    if _sysmon_event_id(record) != 2 or sysmon_file_status_id(record) != 1:
++        return None
++    if _clean_string(record.get("CreationUtcTime")) is None:
++        return None
++    return _sysmon_target_file(record, resulting=True)
+ 
+ 
+ CUSTOM_OPS = {
++    "sysmon_file_activity_id": sysmon_file_activity_id,
++    "sysmon_file_activity_name": sysmon_file_activity_name,
++    "sysmon_file_type_uid": sysmon_file_type_uid,
++    "sysmon_file_type_name": sysmon_file_type_name,
++    "sysmon_file_severity_id": sysmon_file_severity_id,
++    "sysmon_file_severity": sysmon_file_severity,
++    "sysmon_file_status_id": sysmon_file_status_id,
++    "sysmon_file_status": sysmon_file_status,
++    "sysmon_file_actor": sysmon_file_actor,
++    "sysmon_file_result": sysmon_file_result,
++
+     "sysmon_service_type_uid": sysmon_service_type_uid,
+     "sysmon_service_type_name": sysmon_service_type_name,
+     "sysmon_service_severity_id": sysmon_service_severity_id,
+--- previous/sysmon.json
++++ sysmon.json
+@@ -307,20 +307,50 @@
+         "metadata.product.vendor_name": {
+           "const": "Microsoft"
+         },
+-        "metadata.uid": {
+-          "path": "$.id"
++        "metadata.logged_time": {
++          "sysmon_collector_logged_time": "$"
++        },
++        "metadata.uid": {
++          "path": "$.id"
++        },
++        "metadata.original_event_uid": {
++          "to_string": "$.RecordNumber"
+         },
+         "metadata.event_code": {
+           "to_string": "$.EventID"
+         },
++        "metadata.log_name": {
++          "path": "$.Channel"
++        },
+         "metadata.log_source": {
+           "path": "$.Channel"
+         },
+         "metadata.log_provider": {
+           "path": "$.SourceName"
+         },
+-        "time": {
+-          "sysmon_utc_time": "$.UtcTime"
++        "metadata.log_version": {
++          "to_string": "$.Version"
++        },
++        "metadata.original_time": {
++          "path": "$.UtcTime"
++        },
++        "metadata.log_level": {
++          "path": "$.EventType"
++        },
++        "metadata.profiles": {
++          "const": [
++            "host",
++            "security_control"
++          ]
++        },
++        "time": {
++          "sysmon_utc_time": "$.UtcTime"
++        },
++        "timezone_offset": {
++          "const": 0
++        },
++        "message": {
++          "path": "$.Message"
+         },
+         "category_uid": {
+           "const": 1
+@@ -335,66 +365,100 @@
+           "const": "File System Activity"
+         },
+         "activity_id": {
++          "sysmon_file_activity_id": "$"
++        },
++        "activity_name": {
++          "sysmon_file_activity_name": "$"
++        },
++        "type_uid": {
++          "sysmon_file_type_uid": "$"
++        },
++        "type_name": {
++          "sysmon_file_type_name": "$"
++        },
++        "severity_id": {
++          "sysmon_file_severity_id": "$"
++        },
++        "severity": {
++          "sysmon_file_severity": "$"
++        },
++        "status_id": {
++          "sysmon_file_status_id": "$"
++        },
++        "status": {
++          "sysmon_file_status": "$"
++        },
++        "actor": {
++          "sysmon_file_actor": "$"
++        },
++        "file": {
++          "sysmon_target_file": "$"
++        },
++        "file_result": {
++          "sysmon_file_result": "$"
++        },
++        "device": {
++          "sysmon_network_device": "$"
++        },
++        "action_id": {
+           "lookup": "$.EventID",
+           "table": {
+-            "2": 6,
+-            "11": 1,
+-            "15": 1,
+-            "23": 4,
+-            "26": 4,
+-            "27": 1,
+-            "28": 4,
+-            "29": 1
++            "2": 3,
++            "11": 3,
++            "15": 3,
++            "23": 3,
++            "26": 3,
++            "27": 2,
++            "28": 2,
++            "29": 3
+           },
++          "if_null": 0,
+           "default": 0
+         },
+-        "activity_name": {
++        "action": {
+           "lookup": "$.EventID",
+           "table": {
+-            "2": "Set Attributes",
+-            "11": "Create",
+-            "15": "Create",
+-            "23": "Delete",
+-            "26": "Delete",
+-            "27": "Create",
+-            "28": "Delete",
+-            "29": "Create"
++            "2": "Observed",
++            "11": "Observed",
++            "15": "Observed",
++            "23": "Observed",
++            "26": "Observed",
++            "27": "Denied",
++            "28": "Denied",
++            "29": "Observed"
+           },
++          "if_null": "Unknown",
+           "default": "Unknown"
+         },
+-        "type_uid": {
+-          "expr": "class_uid * 100 + activity_id"
+-        },
+-        "severity_id": {
+-          "lookup": "$.Severity",
++        "disposition_id": {
++          "lookup": "$.EventID",
+           "table": {
+-            "INFO": 1
++            "2": 17,
++            "11": 17,
++            "15": 17,
++            "23": 17,
++            "26": 17,
++            "27": 2,
++            "28": 2,
++            "29": 17
+           },
+-          "default": 99
+-        },
+-        "severity": {
+-          "sysmon_severity_text": "$.Severity"
+-        },
+-        "status_id": {
+-          "sysmon_event_status_id": "$"
+-        },
+-        "status": {
+-          "sysmon_event_status_text": "$"
+-        },
+-        "actor": {
+-          "sysmon_actor": "$"
+-        },
+-        "file": {
+-          "sysmon_target_file": "$"
+-        },
+-        "device.hostname": {
+-          "path": "$.Hostname"
+-        },
+-        "device.ip": {
+-          "path": "$.host_ip"
+-        },
+-        "device.type_id": {
+-          "const": 5
++          "if_null": 0,
++          "default": 0
++        },
++        "disposition": {
++          "lookup": "$.EventID",
++          "table": {
++            "2": "Logged",
++            "11": "Logged",
++            "15": "Logged",
++            "23": "Logged",
++            "26": "Logged",
++            "27": "Blocked",
++            "28": "Blocked",
++            "29": "Logged"
++          },
++          "if_null": "Unknown",
++          "default": "Unknown"
+         }
+       }
+     },

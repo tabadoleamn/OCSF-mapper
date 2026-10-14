@@ -50,7 +50,7 @@ mapping_file_name = MAPPING_FILE.stem
 
 # Set only after confirming the collector's timezone. For UTC+03:30 use 210.
 # None omits timezone-less receipt timestamps instead of guessing.
-COLLECTOR_TIMEZONE_OFFSET_MINUTES: int | None = None
+COLLECTOR_TIMEZONE_OFFSET_MINUTES: int | None = 210
 
 CUSTOM_OP_NAMES = set(CUSTOM_OPS)
 
