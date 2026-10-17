@@ -503,9 +503,15 @@ def sysmon_source_endpoint(
         record.get("SourcePort")
     )
 
+    svc_name = _clean_string(
+        record.get("SourcePortName")
+    )
 
     if hostname:
         endpoint["hostname"] = hostname
+
+    if svc_name:
+        endpoint["svc_name"] = svc_name
 
     if ip:
         endpoint["ip"] = ip
@@ -536,10 +542,16 @@ def sysmon_destination_endpoint(
     port = _safe_int(
         record.get("DestinationPort")
     )
-
+     
+    svc_name = _clean_string(
+        record.get("DestinationPortName")
+    )
 
     if hostname:
         endpoint["hostname"] = hostname
+
+    if svc_name:
+        endpoint["svc_name"] = svc_name
 
     if ip:
         endpoint["ip"] = ip

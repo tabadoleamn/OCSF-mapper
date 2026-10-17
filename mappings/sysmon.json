@@ -459,13 +459,7 @@
         },
         "class_name": {
           "const": "Network Activity"
-        },
-        "dst_endpoint.port": {
-          "int": "$.DestinationPort"
-        },
-        "dst_endpoint.svc_name": {
-          "path": "$.DestinationPortName"
-        },        
+        },       
         "activity_id": {
           "lookup": "$.EventID",
           "table": {
@@ -512,6 +506,7 @@
         "dst_endpoint": {
           "sysmon_destination_endpoint": "$"
         },
+        
         "connection_info": {
           "sysmon_connection_info": "$"
         },
