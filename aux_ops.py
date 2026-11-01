@@ -327,7 +327,7 @@ def sysmon_utc_time(value: Any) -> int | None:
     return int(dt.timestamp() * 1000)
 
 
-def sysmon_collector_logged_time(record: dict[str, Any]) -> int | None:
+def sysmon_collector_logged_time(record: dict[str, Any]) -> int | None: # converts local time to UTC then calculates epoc time in miliseconds
     """Only normalize collector receipt time with a known timezone."""
     value = _clean_string(record.get("EventReceivedTime"))
     if value is None:
@@ -696,16 +696,18 @@ def sysmon_driver(
 
 # ***************************************************************
 def sysmon_service(record: dict[str, Any]) -> dict[str, Any]:
-    """Required Windows service object; native ID 4 describes Sysmon's service."""
+    """Describe Sysmon's service; Service* fields are optional enrichment."""
     name = _clean_string(record.get("ServiceName"))
+    # Logical fallback only: the installed SCM name can be Sysmon64 or renamed.
     result: dict[str, Any] = {"name": name or "Sysmon"}
-    # Sysmon is a user-mode Windows service, accompanied by a separate driver.
-    # Unknown is used outside its documented service-state event.
+    # Event 4 concerns the user-mode service, not Sysmon's separate driver.
     category_id = 2 if _sysmon_event_id(record) == 4 else 0
-    result.update({"service_category_id": category_id,
-                   "service_category": {0: "Unknown", 2: "User Mode"}[category_id]})
-    # Populate optional properties only from explicit service-specific fields.
+    result.update({
+        "service_category_id": category_id,
+        "service_category": {0: "Unknown", 2: "User Mode"}[category_id],
+    })
     for source, target in {
+        "ServiceUid": "uid",
         "ServiceCommandLine": "cmd_line",
         "ServiceStartName": "service_start_name",
         "ServiceLoadOrderGroup": "load_order_group",
@@ -713,32 +715,54 @@ def sysmon_service(record: dict[str, Any]) -> dict[str, Any]:
         value = _clean_string(record.get(source))
         if value is not None:
             result[target] = value
+
+    version = (_clean_string(record.get("ServiceVersion"))
+               or sysmon_service_product_version(record))
+    if version:
+        result["version"] = version
+
+    service_file = _sysmon_service_file_from_path(record.get("ServiceImage"))
+    if service_file:
+        result["service_file"] = service_file
+
+    # The service's hosting process is distinct from the initiating actor.
+    process: dict[str, Any] = {}
+    pid = _sysmon_service_nonnegative_int(record.get("ServiceProcessId"))
+    guid = _clean_string(record.get("ServiceProcessGuid"))
+    if pid is not None:
+        process["pid"] = pid
+    if guid:
+        process["uid"] = guid
+    if process:
+        if service_file:
+            process.update({"name": service_file["name"], "path": service_file["path"]})
+        if "cmd_line" in result:
+            process["cmd_line"] = result["cmd_line"]
+        result["hosting_process"] = process
     return result
 
 
-# *******************************************************
-def sysmon_service_activity_name(record: dict[str, Any]) -> str:
-    activity = sysmon_service_activity_id(record)
-    if activity == 99:
-        return _clean_string(record.get("State")) or "Other"
-    return {0: "Unknown", 3: "Start", 4: "Stop"}[activity]
-
-
-# ***********************************************************************
 def sysmon_service_activity_id(record: dict[str, Any]) -> int:
-    """Sysmon ID 4 reports state changes, not service installation/deletion."""
+    """Sysmon ID 4 reports service state, not installation or deletion."""
     state = _clean_string(record.get("State"))
     if state is None:
         return 0
-    # Exact matching avoids treating 'not started' or 'restart failed' as Start.
-    return {"started": 3, "start": 3, "running": 3,
-            "stopped": 4, "stop": 4}.get(state.casefold(), 99)
+    # Exact matches avoid treating 'not started' or 'restart failed' as Start.
+    return {
+        "started": 3, "start": 3, "running": 3,
+        "stopped": 4, "stop": 4,
+    }.get(state.casefold(), 99)
 
 
-# ******************************************************************
+def sysmon_service_activity_name(record: dict[str, Any]) -> str:
+    activity_id = sysmon_service_activity_id(record)
+    if activity_id == 99:
+        return _clean_string(record.get("State")) or "Other"
+    return {0: "Unknown", 3: "Start", 4: "Stop"}[activity_id]
+
 
 def sysmon_service_type_uid(record: dict[str, Any]) -> int:
-    # Calculate in the custom stage together with activity_id.
+    # The standard stage cannot reference activity_id from the custom stage.
     return 201004 * 100 + sysmon_service_activity_id(record)
 
 
@@ -746,34 +770,162 @@ def sysmon_service_type_name(record: dict[str, Any]) -> str:
     return "Windows Service Activity: " + sysmon_service_activity_name(record)
 
 
+def _sysmon_service_severity_pair(record: dict[str, Any]) -> tuple[int, str]:
+    captions = {
+        0: "Unknown", 1: "Informational", 2: "Low", 3: "Medium",
+        4: "High", 5: "Critical", 6: "Fatal",
+    }
+    text_ids = {
+        "unknown": 0, "debug": 1, "verbose": 1, "info": 1,
+        "information": 1, "informational": 1, "low": 2,
+        "warn": 3, "warning": 3, "medium": 3, "error": 4,
+        "high": 4, "critical": 5, "fatal": 6,
+    }
+    for field in ("Severity", "EventType", "Level"):
+        raw = _clean_string(record.get(field))
+        if raw is None:
+            continue
+        # Only Level is interpreted as the Windows Event Level enumeration.
+        if field == "Level" and re.fullmatch(r"[+-]?\d+", raw):
+            severity_id = {0: 0, 1: 5, 2: 4, 3: 3, 4: 1, 5: 1}.get(int(raw), 99)
+        else:
+            severity_id = text_ids.get(raw.casefold(), 99)
+        return severity_id, captions.get(severity_id, raw)
+    severity_id = 1 if _sysmon_event_id(record) == 4 else 0
+    return severity_id, captions[severity_id]
+
+
 def sysmon_service_severity_id(record: dict[str, Any]) -> int:
-    if _sysmon_network_raw_severity(record) is None:
-        return 1 if _sysmon_event_id(record) == 4 else 0
-    return sysmon_network_severity_id(record)
+    return _sysmon_service_severity_pair(record)[0]
 
 
 def sysmon_service_severity(record: dict[str, Any]) -> str:
-    severity_id = sysmon_service_severity_id(record)
-    captions = {0: "Unknown", 1: "Informational", 2: "Low", 3: "Medium",
-                4: "High", 5: "Critical", 6: "Fatal"}
-    return captions.get(severity_id, str(_sysmon_network_raw_severity(record)).strip())
+    return _sysmon_service_severity_pair(record)[1]
+
+
+def _sysmon_service_status_pair(record: dict[str, Any]) -> tuple[int, str]:
+    # State describes the observed service state; it is not an outcome field.
+    raw = _clean_string(record.get("Status"))
+    if raw is None or raw.casefold() == "unknown":
+        return 0, "Unknown"
+    normalized = raw.casefold()
+    if normalized in {"success", "successful", "succeeded", "ok"}:
+        return 1, "Success"
+    if normalized in {
+        "failure", "failed", "error", "denied", "blocked", "refused",
+        "timeout", "timed out", "access denied",
+    }:
+        return 2, "Failure"
+    # Do not decode arbitrary numeric/NTSTATUS values as boolean outcomes.
+    return 99, raw
+
+
+def sysmon_service_status_id(record: dict[str, Any]) -> int:
+    return _sysmon_service_status_pair(record)[0]
+
+
+def sysmon_service_status(record: dict[str, Any]) -> str:
+    return _sysmon_service_status_pair(record)[1]
+
+
+def sysmon_service_status_code(record: dict[str, Any]) -> str | None:
+    explicit_code = _clean_string(record.get("StatusCode"))
+    if explicit_code is not None:
+        return explicit_code
+    raw = _clean_string(record.get("Status"))
+    if raw and re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|[+-]?\d+)", raw):
+        return raw
+    return None
 
 
 def sysmon_service_product_version(record: dict[str, Any]) -> str | None:
-    # Native ID 4 Version is the Sysmon binary version; a collector may instead
-    # expose the numeric event-header version under the same flat key.
-    value = _clean_string(record.get("SysmonVersion") or record.get("Version"))
+    # Explicit enrichment is unambiguous, including a major-only version.
+    explicit_version = _clean_string(record.get("SysmonVersion"))
+    if explicit_version is not None:
+        return explicit_version
+    # A collector may flatten the numeric event-header version to Version.
+    # Accept only a dotted binary version from that ambiguous source field.
+    value = _clean_string(record.get("Version"))
     return value if value and re.fullmatch(r"\d+(?:\.\d+)+", value) else None
 
 
+def _sysmon_service_nonnegative_int(value: Any) -> int | None:
+    # Reject booleans and floats instead of silently converting them to PIDs.
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str) and re.fullmatch(r"\+?\d+", value.strip()):
+        return int(value)
+    return None
+
+
+def _sysmon_service_file_from_path(value: Any) -> dict[str, Any] | None:
+    """ServiceImage and ActorImage are executable paths, not command lines."""
+    path = _clean_string(value)
+    if path is None:
+        return None
+    name = windows_basename(path)
+    if not name:
+        return None
+    result: dict[str, Any] = {
+        "name": name, "path": path, "type_id": 8, "type": "Executable File",
+    }
+    parent = windows_dirname(path)
+    if parent:
+        result["parent_folder"] = parent
+    return result
+
+
 def sysmon_service_actor(record: dict[str, Any]) -> dict[str, Any] | None:
-    """Use explicit initiator enrichment only; provider PID/account is not proof."""
-    return sysmon_network_actor({
-        "ProcessId": record.get("ActorProcessId"),
-        "ProcessGuid": record.get("ActorProcessGuid"),
-        "Image": record.get("ActorImage"),
-        "User": record.get("ActorUser"),
-    })
+    """Use explicit initiator enrichment; the provider PID/user is not proof."""
+    actor: dict[str, Any] = {}
+    process: dict[str, Any] = {}
+    pid = _sysmon_service_nonnegative_int(record.get("ActorProcessId"))
+    guid = _clean_string(record.get("ActorProcessGuid"))
+    if pid is not None:
+        process["pid"] = pid
+    if guid:
+        process["uid"] = guid
+    # OCSF process requires pid, uid, or cpid. Image alone is insufficient.
+    if process:
+        process_file = _sysmon_service_file_from_path(record.get("ActorImage"))
+        if process_file:
+            process.update({
+                "name": process_file["name"], "path": process_file["path"],
+                "file": process_file,
+            })
+        command_line = _clean_string(record.get("ActorCommandLine"))
+        if command_line:
+            process["cmd_line"] = command_line
+        actor["process"] = process
+    user = windows_domain_user(_clean_string(record.get("ActorUser"))) or {}
+    sid = _clean_string(record.get("ActorUserSid"))
+    if sid:
+        user["uid"] = sid
+    if user.get("name") or user.get("uid"):
+        actor["user"] = user
+    return actor or None
+
+
+def sysmon_service_device(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Map the reporting host and a resolved host_ip; omit placeholder tokens."""
+    result: dict[str, Any] = {}
+    hostname = (_clean_string(record.get("Hostname"))
+                or _clean_string(record.get("Computer")))
+    if hostname:
+        result["hostname"] = hostname
+    host_ip = _clean_string(record.get("host_ip"))
+    if host_ip:
+        try:
+            # A scoped IPv6 interface suffix is not part of a pure IP value.
+            if "%" not in host_ip:
+                result["ip"] = str(ipaddress.ip_address(host_ip))
+        except ValueError:
+            pass
+    if result:
+        result.update({"type_id": 0, "type": "Unknown"})
+    return result or None
 
 
 def sysmon_error_message(record: dict[str, Any]) -> str | None:
@@ -1791,10 +1943,358 @@ def sysmon_registry_value_activity_name(record: dict[str, Any]) -> None:
     return None
 
 
-def sysmon_target_file(record: dict[str, Any]) -> None:
-    """TODO: implement sysmon_target_file; omit this field for now."""
+# File System Activity helpers for Sysmon Event IDs 2, 11, 15, 23, 26-29.
+
+_SYSMON_FILE_ACTIVITIES = {
+    2: (6, "Set Attributes"),
+    11: (99, "FileCreate"),  # Native event covers creation OR overwrite.
+    15: (1, "Create"),
+    23: (4, "Delete"),
+    26: (4, "Delete"),
+    27: (1, "Create"),
+    28: (99, "FileBlockShredding"),  # Exact file operation is not reported.
+    29: (1, "Create"),
+}
+
+_SYSMON_FILE_SEVERITIES = {
+    0: "Unknown", 1: "Informational", 2: "Low", 3: "Medium",
+    4: "High", 5: "Critical", 6: "Fatal",
+}
+
+
+def sysmon_file_activity_id(record: dict[str, Any]) -> int:
+    event_id = _sysmon_event_id(record)
+    if event_id is None:
+        return 0
+    return _SYSMON_FILE_ACTIVITIES.get(event_id, (99, "Other"))[0]
+
+
+def sysmon_file_activity_name(record: dict[str, Any]) -> str:
+    event_id = _sysmon_event_id(record)
+    if event_id is None:
+        return "Unknown"
+    return _SYSMON_FILE_ACTIVITIES.get(
+        event_id, (99, f"Sysmon Event {event_id}")
+    )[1]
+
+
+def sysmon_file_type_uid(record: dict[str, Any]) -> int:
+    # A standard-stage expr cannot see a custom-stage activity_id.
+    return 1001 * 100 + sysmon_file_activity_id(record)
+
+
+def sysmon_file_type_name(record: dict[str, Any]) -> str:
+    return "File System Activity: " + sysmon_file_activity_name(record)
+
+
+def _sysmon_file_severity_pair(record: dict[str, Any]) -> tuple[int, str]:
+    text_ids = {
+        "unknown": 0, "debug": 1, "verbose": 1, "info": 1,
+        "information": 1, "informational": 1, "low": 2,
+        "warn": 3, "warning": 3, "medium": 3, "error": 4,
+        "high": 4, "critical": 5, "fatal": 6,
+    }
+    for field in ("Severity", "EventType", "Level"):
+        raw = _clean_string(record.get(field))
+        if raw is None:
+            continue
+        # Only Level has documented Windows numeric severity semantics.
+        if field == "Level" and re.fullmatch(r"[+-]?\d+", raw):
+            severity_id = {0: 0, 1: 5, 2: 4, 3: 3, 4: 1, 5: 1}.get(
+                int(raw), 99
+            )
+        else:
+            severity_id = text_ids.get(raw.casefold(), 99)
+        return severity_id, _SYSMON_FILE_SEVERITIES.get(severity_id, raw)
+    severity_id = 1 if _sysmon_event_id(record) in _SYSMON_FILE_ACTIVITIES else 0
+    return severity_id, _SYSMON_FILE_SEVERITIES[severity_id]
+
+
+def sysmon_file_severity_id(record: dict[str, Any]) -> int:
+    return _sysmon_file_severity_pair(record)[0]
+
+
+def sysmon_file_severity(record: dict[str, Any]) -> str:
+    return _sysmon_file_severity_pair(record)[1]
+
+
+def _sysmon_file_status_pair(record: dict[str, Any]) -> tuple[int, str]:
+    event_id = _sysmon_event_id(record)
+    # Status describes the requested file operation, not success of the block.
+    # Leave an inconsistent collector Status untouched for automatic unmapped.
+    if event_id in {27, 28}:
+        return 2, "Failure"
+    raw = _clean_string(record.get("Status"))
+    if raw is not None:
+        normalized = raw.casefold()
+        if normalized in {"success", "successful", "succeeded", "ok"}:
+            return 1, "Success"
+        if normalized in {
+            "failure", "failed", "error", "denied", "blocked", "refused",
+            "timeout", "timed out", "access denied",
+        }:
+            return 2, "Failure"
+        if normalized == "unknown":
+            return 0, "Unknown"
+        return 99, raw
+    if event_id in {2, 11, 15, 23, 26, 29}:
+        return 1, "Success"
+    return 0, "Unknown"
+
+
+def sysmon_file_status_id(record: dict[str, Any]) -> int:
+    return _sysmon_file_status_pair(record)[0]
+
+
+def sysmon_file_status(record: dict[str, Any]) -> str:
+    return _sysmon_file_status_pair(record)[1]
+
+
+def _sysmon_file_nonnegative_int(value: Any) -> int | None:
+    # Do not silently truncate floats or convert True to PID/size 1.
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str) and re.fullmatch(r"\+?\d+", value.strip()):
+        return int(value)
     return None
 
+
+def _sysmon_file_from_path(
+    value: Any, type_id: int = 1, *, named_stream: bool = False,
+) -> dict[str, Any] | None:
+    path = _clean_string(value)
+    if path is None:
+        return None
+    name = windows_basename(path)
+    if not name:
+        return None
+    result: dict[str, Any] = {
+        "name": name, "path": path,
+        "type_id": type_id,
+        "type": "Executable File" if type_id == 8 else "Regular File",
+    }
+    parent = windows_dirname(path)
+    if parent:
+        result["parent_folder"] = parent
+    # Ignore the drive-letter colon when checking alternate data streams.
+    is_stream = named_stream or ":" in ntpath.splitdrive(path)[1]
+    if not is_stream:
+        extension = ntpath.splitext(name)[1].lstrip(".")
+        if extension:
+            result["ext"] = extension
+    return result
+
+
+def sysmon_file_actor(record: dict[str, Any]) -> dict[str, Any] | None:
+    actor: dict[str, Any] = {}
+    process: dict[str, Any] = {}
+    # ProcessID (capital D) is provider/header context, not the actor PID.
+    pid = _sysmon_file_nonnegative_int(record.get("ProcessId"))
+    guid = _clean_string(record.get("ProcessGuid"))
+    if pid is not None:
+        process["pid"] = pid
+    if guid:
+        process["uid"] = guid
+    if process:
+        image = _clean_string(record.get("Image"))
+        if image:
+            process["path"] = image
+            process_file = _sysmon_file_from_path(image, 8)
+            if process_file:
+                process["name"] = process_file["name"]
+                process["file"] = process_file
+        command_line = _clean_string(record.get("CommandLine"))
+        if command_line:
+            process["cmd_line"] = command_line
+    user = windows_domain_user(_clean_string(record.get("User")))
+    if user and user.get("name"):
+        actor["user"] = user
+        if process:
+            process["user"] = user.copy()
+    if process:
+        actor["process"] = process
+    return actor or None
+
+
+def sysmon_file_device(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Use a resolved inventory address supplied in host_ip; omit tokens."""
+    result: dict[str, Any] = {}
+    hostname = (
+        _clean_string(record.get("Hostname"))
+        or _clean_string(record.get("Computer"))
+    )
+    if hostname:
+        result["hostname"] = hostname
+    host_ip = _clean_string(record.get("host_ip"))
+    if host_ip:
+        try:
+            # Scoped IPv6 addresses contain an interface suffix, not pure IP.
+            if "%" not in host_ip:
+                result["ip"] = str(ipaddress.ip_address(host_ip))
+        except ValueError:
+            pass
+    if result:
+        result.update({"type_id": 0, "type": "Unknown"})
+    return result or None
+
+
+def _sysmon_target_file(
+    record: dict[str, Any], *, after_change: bool = False,
+) -> dict[str, Any] | None:
+    event_id = _sysmon_event_id(record)
+    is_stream = event_id == 15
+    file_object = _sysmon_file_from_path(
+        record.get("TargetFilename"), named_stream=is_stream
+    )
+    if file_object is None:
+        return None
+    if not is_stream:
+        executable = event_id in {27, 29}
+        if not executable:
+            executable = _parse_sysmon_bool(record.get("IsExecutable")) is True
+        if executable:
+            file_object.update({"type_id": 8, "type": "Executable File"})
+        # These hashes/metadata describe the base file, not a named stream.
+        hashes = sysmon_hashes_to_ocsf_fingerprints(
+            _clean_string(record.get("Hashes"))
+            or _clean_string(record.get("Hash"))
+        )
+        if hashes:
+            file_object["hashes"] = hashes
+        size = _sysmon_file_nonnegative_int(record.get("FileSize"))
+        if size is not None:
+            file_object["size"] = size
+        timestamp_field = (
+            "PreviousCreationUtcTime"
+            if event_id == 2 and not after_change else "CreationUtcTime"
+        )
+        created_time = sysmon_utc_time(record.get(timestamp_field))
+        if created_time is not None:
+            file_object["created_time"] = created_time
+    if event_id in {23, 26} and sysmon_file_status_id(record) == 1:
+        file_object["is_deleted"] = True
+    return file_object
+
+
+def sysmon_target_file(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Describe the actual target; never substitute the actor Image."""
+    return _sysmon_target_file(record)
+
+
+def sysmon_file_result(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Expose the changed creation timestamp only after successful Event 2."""
+    if _sysmon_event_id(record) != 2 or sysmon_file_status_id(record) != 1:
+        return None
+    result = _sysmon_target_file(record, after_change=True)
+    return result if result and "created_time" in result else None
+
+
+# Event 6 is a driver load. ImageLoaded identifies the driver file;
+# Image and ProcessID from other records or event headers are not fallbacks.
+def sysmon_kernel_driver(record: dict[str, Any]) -> dict[str, Any] | None:
+    path = _clean_string(record.get("ImageLoaded"))
+    if path is None:
+        return None
+
+    name = windows_basename(path)
+    if not name:
+        return None
+
+    file_object: dict[str, Any] = {
+        "name": name,
+        "path": path,
+        "type_id": 1,
+        "type": "Regular File",
+    }
+
+    parent = windows_dirname(path)
+    if parent:
+        file_object["parent_folder"] = parent
+
+    hashes = sysmon_hashes_to_ocsf_fingerprints(record.get("Hashes"))
+    if hashes:
+        file_object["hashes"] = hashes
+
+    # Normalize only unambiguous verification states. A false Signed value
+    # contradicts a reported signature state, so preserve both source values
+    # instead of creating a signature object in that case. Sysmon's Signature
+    # is a signer display name, not necessarily a certificate issuer or DN.
+    #
+    # Peek through the dict base class so unsupported/contradictory statuses
+    # remain available to the converter's automatic unmapped handling. Once a
+    # status is mapped, the tracked get marks it as consumed. Signed and
+    # Signature are not marked consumed and are preserved under unmapped.
+    raw_status = _clean_string(dict.get(record, "SignatureStatus"))
+    signed = _parse_sysmon_bool(dict.get(record, "Signed"))
+
+    state = {
+        "valid": (1, "Valid"),
+        "expired": (2, "Expired"),
+        "revoked": (3, "Revoked"),
+        "untrusted": (6, "Untrusted"),
+    }.get(raw_status.casefold()) if raw_status else None
+
+    if state is not None and signed is not False:
+        record.get("SignatureStatus")
+        file_object["signatures"] = [{
+            "algorithm_id": 0,
+            "algorithm": "Unknown",
+            "state_id": state[0],
+            "state": state[1],
+        }]
+
+    return {"file": file_object}
+
+
+def _sysmon_kernel_severity_pair(
+    record: dict[str, Any],
+) -> tuple[int, str]:
+    # Match the existing service precedence and numeric-Level policy;
+    # only the native Event 6 fallback differs from that service helper.
+    for field in ("Severity", "EventType", "Level"):
+        if _clean_string(record.get(field)) is not None:
+            return _sysmon_service_severity_pair(record)
+
+    return (
+        (1, "Informational")
+        if _sysmon_event_id(record) == 6
+        else (0, "Unknown")
+    )
+
+
+def sysmon_kernel_severity_id(record: dict[str, Any]) -> int:
+    return _sysmon_kernel_severity_pair(record)[0]
+
+
+def sysmon_kernel_severity(record: dict[str, Any]) -> str:
+    return _sysmon_kernel_severity_pair(record)[1]
+
+
+def sysmon_kernel_time_offset(value: Any) -> int | None:
+    """Offset of source event time; naive Sysmon UtcTime is explicitly UTC."""
+    value = _clean_string(value)
+    if value is None:
+        return None
+
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        delta = dt.utcoffset()
+
+        if delta is None:
+            return 0
+
+        seconds = delta.total_seconds()
+        if seconds % 60 or not -1080 <= seconds / 60 <= 1080:
+            return None
+
+        return int(seconds / 60)
+
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    
 
 CUSTOM_OPS = {
     "sysmon_service_type_uid": sysmon_service_type_uid,
@@ -1930,6 +2430,38 @@ CUSTOM_OPS.update({
     "sysmon_windows_resource": sysmon_windows_resource,
 })
 
+
+# File System Activity operations; sysmon_target_file is registered above.
+CUSTOM_OPS.update({
+    "sysmon_file_activity_id": sysmon_file_activity_id,
+    "sysmon_file_activity_name": sysmon_file_activity_name,
+    "sysmon_file_type_uid": sysmon_file_type_uid,
+    "sysmon_file_type_name": sysmon_file_type_name,
+    "sysmon_file_severity_id": sysmon_file_severity_id,
+    "sysmon_file_severity": sysmon_file_severity,
+    "sysmon_file_status_id": sysmon_file_status_id,
+    "sysmon_file_status": sysmon_file_status,
+    "sysmon_file_actor": sysmon_file_actor,
+    "sysmon_file_device": sysmon_file_device,
+    "sysmon_file_result": sysmon_file_result,
+})
+
+
+# Additional Windows Service Activity operations.
+CUSTOM_OPS.update({
+    "sysmon_service_status_id": sysmon_service_status_id,
+    "sysmon_service_status": sysmon_service_status,
+    "sysmon_service_status_code": sysmon_service_status_code,
+    "sysmon_service_device": sysmon_service_device,
+})
+
+
+CUSTOM_OPS.update({
+    "sysmon_kernel_driver": sysmon_kernel_driver,
+    "sysmon_kernel_severity_id": sysmon_kernel_severity_id,
+    "sysmon_kernel_severity": sysmon_kernel_severity,
+    "sysmon_kernel_time_offset": sysmon_kernel_time_offset,
+})
 def apply_custom_op(
     op: dict[str, Any],
     record: dict[str, Any],

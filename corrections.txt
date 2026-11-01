@@ -1,7 +1,55 @@
 sysmon:
-  network activity:
+
+  windows_service_activity:
+    (not important)decide on metadata.product.version, is it symon version? if so, is it SchemaVersion or Version in raw log?
+    (not important)metadata.log_version should be SchemaVersion in raw log in my opininon
+    message is better to be included in sysmon raw log for future LLM use or enrichment
+    I didn't find Status item in any of logs with eventID=4, status and status_id values are assigned vaguely,Status should be filled as an enrichment.
+    activity and activity_id ar ebased only on stsrt and stopped because of htis line in microsoft document:  (for event ID 4) The service state change event reports the state of the Sysmon service (started or stopped).
+    device.type_id and type are set to 0, unknown which can be server or desktop ifit is needed
+    actor: ActorProcessId, ActorProcessGuid, ActorImage, ActorCommandLine, ActorUser, ActorUserSid
+    win_service.service_category_id is set to 2(user mode)
+    metadata.log_version in my opinion is sysmon log version for example 15
+    what is sysmon_service_product_version which is used for metadata.product.version
+    until activity_id were checked
+
+    taaa status_code
+  file_activity:  fairly done  
+    deciding on ProcessID or ProcessId for network actor and file activity actor, in my opinion pid should be processID    
+    device.ip comes from host_ip, is it needed for it to be [ENR]
+
+  network activity: fairly done
     device.ip which is currently default to None in its custom method should be got from asset inventory
-  
+
+
+  kernel_extension_activity:
+    "activity_id": 1 , I guess a driver is loaded and it triggers this log therefore this value is consoidered constant
+    device.type_id and type are set to 0 , unknown meaning that the host is unknown but can be desktop or server
+    driver.file.type_id and type should be asked from chatgpt why it has set these two as constant("type_id": 1,"type": "Regular File"). can't it have any other value such as executable. 
+    driver.file.signature.state and state_id should be asked from chatgpt why it limited those to "valid": (1, "Valid"),"expired": (2, "Expired"),"revoked": (3, "Revoked"),"untrusted": (6, "Untrusted")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   Windows Service Activity:
     win_service.service_category_id is constant , delete win_service if it is not needed
     severity_id, severity is constant

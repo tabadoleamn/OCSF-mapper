@@ -103,7 +103,7 @@
           "sysmon_collector_logged_time": "$"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "metadata.original_event_uid": {
           "to_string": "$.RecordNumber"
@@ -307,11 +307,20 @@
         "metadata.product.vendor_name": {
           "const": "Microsoft"
         },
+        "metadata.logged_time": {
+          "sysmon_collector_logged_time": "$"
+        },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
+        },
+        "metadata.original_event_uid": {
+          "to_string": "$.RecordNumber"
         },
         "metadata.event_code": {
           "to_string": "$.EventID"
+        },
+        "metadata.log_name": {
+          "path": "$.Channel"
         },
         "metadata.log_source": {
           "path": "$.Channel"
@@ -319,8 +328,29 @@
         "metadata.log_provider": {
           "path": "$.SourceName"
         },
+        "metadata.log_version": {
+          "to_string": "$.Version"
+        },
+        "metadata.original_time": {
+          "path": "$.UtcTime"
+        },
+        "metadata.log_level": {
+          "path": "$.EventType"
+        },
+        "metadata.profiles": {
+          "const": [
+            "host",
+            "security_control"
+          ]
+        },
         "time": {
           "sysmon_utc_time": "$.UtcTime"
+        },
+        "timezone_offset": {
+          "const": 210
+        },
+        "message": {
+          "path": "$.Message"
         },
         "category_uid": {
           "const": 1
@@ -335,66 +365,96 @@
           "const": "File System Activity"
         },
         "activity_id": {
+          "sysmon_file_activity_id": "$"
+        },
+        "activity_name": {
+          "sysmon_file_activity_name": "$"
+        },
+        "type_uid": {
+          "sysmon_file_type_uid": "$"
+        },
+        "type_name": {
+          "sysmon_file_type_name": "$"
+        },
+        "severity_id": {
+          "sysmon_file_severity_id": "$"
+        },
+        "severity": {
+          "sysmon_file_severity": "$"
+        },
+        "status_id": {
+          "sysmon_file_status_id": "$"
+        },
+        "status": {
+          "sysmon_file_status": "$"
+        },
+        "action_id": {
           "lookup": "$.EventID",
           "table": {
-            "2": 6,
-            "11": 1,
-            "15": 1,
-            "23": 4,
-            "26": 4,
-            "27": 1,
-            "28": 4,
-            "29": 1
+            "2": 3,
+            "11": 3,
+            "15": 3,
+            "23": 3,
+            "26": 3,
+            "27": 2,
+            "28": 2,
+            "29": 3
           },
           "default": 0
         },
-        "activity_name": {
+        "action": {
           "lookup": "$.EventID",
           "table": {
-            "2": "Set Attributes",
-            "11": "Create",
-            "15": "Create",
-            "23": "Delete",
-            "26": "Delete",
-            "27": "Create",
-            "28": "Delete",
-            "29": "Create"
+            "2": "Observed",
+            "11": "Observed",
+            "15": "Observed",
+            "23": "Observed",
+            "26": "Observed",
+            "27": "Denied",
+            "28": "Denied",
+            "29": "Observed"
           },
           "default": "Unknown"
         },
-        "type_uid": {
-          "expr": "class_uid * 100 + activity_id"
-        },
-        "severity_id": {
-          "lookup": "$.Severity",
+        "disposition_id": {
+          "lookup": "$.EventID",
           "table": {
-            "INFO": 1
+            "2": 17,
+            "11": 17,
+            "15": 17,
+            "23": 17,
+            "26": 17,
+            "27": 2,
+            "28": 2,
+            "29": 17
           },
-          "default": 99
+          "default": 0
         },
-        "severity": {
-          "sysmon_severity_text": "$.Severity"
-        },
-        "status_id": {
-          "sysmon_event_status_id": "$"
-        },
-        "status": {
-          "sysmon_event_status_text": "$"
+        "disposition": {
+          "lookup": "$.EventID",
+          "table": {
+            "2": "Logged",
+            "11": "Logged",
+            "15": "Logged",
+            "23": "Logged",
+            "26": "Logged",
+            "27": "Blocked",
+            "28": "Blocked",
+            "29": "Logged"
+          },
+          "default": "Unknown"
         },
         "actor": {
-          "sysmon_actor": "$"
+          "sysmon_file_actor": "$"
+        },
+        "device": {
+          "sysmon_file_device": "$"
         },
         "file": {
           "sysmon_target_file": "$"
         },
-        "device.hostname": {
-          "path": "$.Hostname"
-        },
-        "device.ip": {
-          "path": "$.host_ip"
-        },
-        "device.type_id": {
-          "const": 5
+        "file_result": {
+          "sysmon_file_result": "$"
         }
       }
     },
@@ -413,7 +473,7 @@
           "sysmon_collector_logged_time": "$"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "metadata.original_event_uid": {
           "to_string": "$.RecordNumber"
@@ -443,7 +503,7 @@
           "sysmon_utc_time": "$.UtcTime"
         },
         "timezone_offset": {
-          "const": 0
+          "const": 210
         },
         "message": {
           "path": "$.Message"
@@ -521,9 +581,6 @@
         },
         "observation_point": {
           "sysmon_network_observation_point": "$"
-        },
-        "raw_data": {
-          "raw": true
         }
       }
     },
@@ -542,7 +599,7 @@
           "sysmon_collector_logged_time": "$"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "metadata.original_event_uid": {
           "to_string": "$.RecordNumber"
@@ -570,17 +627,26 @@
             "host"
           ]
         },
+        "metadata.extensions": {
+          "const": [
+            {
+              "name": "win",
+              "uid": "2",
+              "version": "1.9.0"
+            }
+          ]
+        },
         "metadata.product.version": {
-          "sysmon_service_product_version": "$"
+          "const": "[ENR]"
         },
         "metadata.log_version": {
-          "to_string": "$.EventHeader.Version"
+          "to_string": "$.Version"
         },
         "time": {
           "sysmon_utc_time": "$.UtcTime"
         },
         "timezone_offset": {
-          "const": 0
+          "const": 210
         },
         "message": {
           "path": "$.Message"
@@ -615,15 +681,17 @@
         "severity": {
           "sysmon_service_severity": "$"
         },
-                
         "status_id": {
-          "sysmon_network_status_id": "$"
+          "sysmon_service_status_id": "$"
         },
         "status": {
-          "sysmon_network_status": "$"
+          "sysmon_service_status": "$"
+        },
+        "status_code": {
+          "sysmon_service_status_code": "$"
         },
         "device": {
-          "sysmon_network_device": "$"
+          "sysmon_service_device": "$"
         },
         "actor": {
           "sysmon_service_actor": "$"
@@ -635,51 +703,44 @@
     },
     "kernel_extension_activity": {
       "mapping": {
-        "metadata.version": {
-          "const": "1.9.0"
-        },
-        "metadata.product.name": {
-          "const": "Sysmon"
-        },
-        "metadata.product.vendor_name": {
-          "const": "Microsoft"
-        },
-        "metadata.uid": {
-          "path": "$.id"
-        },
-        "time": {
-          "sysmon_utc_time": "$.UtcTime"
-        },
-        "category_uid": {
-          "const": 1
-        },
-        "category_name": {
-          "const": "System Activity"
-        },
-        "class_uid": {
-          "const": 1002
-        },
-        "class_name": {
-          "const": "Kernel Extension Activity"
-        },
-        "activity_id": {
-          "const": 1
-        },
-        "activity_name": {
-          "const": "Load"
-        },
-        "type_uid": {
-          "expr": "class_uid * 100 + activity_id"
-        },
-        "severity_id": {
-          "const": 1
-        },
-        "actor": {
-          "sysmon_actor": "$"
-        },
-        "driver": {
-          "sysmon_driver": "$"
-        }
+        "metadata.version": {"const": "1.9.0"},
+        "metadata.product.name": {"const": "Sysmon"},
+        "metadata.product.vendor_name": {"const": "Microsoft"},
+        "metadata.product.version": {"const": "[ENR]"},
+        "metadata.logged_time": {"sysmon_collector_logged_time": "$"},
+        "metadata.uid": {"to_string": "$.id"},
+        "metadata.original_event_uid": {"to_string": "$.RecordNumber"},
+        "metadata.event_code": {"to_string": "$.EventID"},
+        "metadata.log_name": {"path": "$.Channel"},
+        "metadata.log_source": {"path": "$.Channel"},
+        "metadata.log_provider": {"path": "$.SourceName"},
+        "metadata.original_time": {"path": "$.UtcTime"},
+        "metadata.log_level": {"path": "$.EventType"},
+        "metadata.log_version": {"to_string": "$.Version"},
+        "metadata.profiles": {"const": ["host"]},
+
+        "time": {"sysmon_utc_time": "$.UtcTime"},
+        "timezone_offset": {"const": 210},
+        "message": {"path": "$.Message"},
+
+        "category_uid": {"const": 1},
+        "category_name": {"const": "System Activity"},
+        "class_uid": {"const": 1002},
+        "class_name": {"const": "Kernel Extension Activity"},
+        "activity_id": {"const": 1},
+        "activity_name": {"const": "Load"},
+        "type_uid": {"const": 100201},
+        "type_name": {"const": "Kernel Extension Activity: Load"},
+
+        "severity_id": {"sysmon_kernel_severity_id": "$"},
+        "severity": {"sysmon_kernel_severity": "$"},
+        "status_id": {"sysmon_service_status_id": "$"},
+        "status": {"sysmon_service_status": "$"},
+        "status_code": {"sysmon_service_status_code": "$"},
+
+        "device": {"sysmon_service_device": "$"},
+        "actor": {"sysmon_service_actor": "$"},
+        "driver": {"sysmon_kernel_driver": "$"}
       }
     },
     "module_activity": {
@@ -694,7 +755,7 @@
           "const": "Microsoft"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "time": {
           "sysmon_utc_time": "$.UtcTime"
@@ -743,7 +804,7 @@
           "const": "Microsoft"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "metadata.event_code": {
           "to_string": "$.EventID"
@@ -795,7 +856,7 @@
           "const": "Microsoft"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "time": {
           "sysmon_utc_time": "$.UtcTime"
@@ -844,7 +905,7 @@
           "const": "Microsoft"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "time": {
           "sysmon_utc_time": "$.UtcTime"
@@ -893,7 +954,7 @@
           "const": "Microsoft"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "time": {
           "sysmon_utc_time": "$.UtcTime"
@@ -942,7 +1003,7 @@
           "const": "Microsoft"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "time": {
           "sysmon_utc_time": "$.UtcTime"
@@ -994,7 +1055,7 @@
           "sysmon_collector_logged_time": "$"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "metadata.original_event_uid": {
           "to_string": "$.RecordNumber"
@@ -1026,7 +1087,7 @@
           "sysmon_utc_time": "$.UtcTime"
         },
         "timezone_offset": {
-          "const": 0
+          "const": 210
         },
         "category_uid": {
           "const": 6
@@ -1078,7 +1139,7 @@
           "const": "Microsoft"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "metadata.event_code": {
           "to_string": "$.EventID"

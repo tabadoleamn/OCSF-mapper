@@ -10,3 +10,6 @@ prompts.py
 tools.py
 top5_jsons.py
 raw & ocsf logs/
+special_eventID_extract.py
+concatenator.py
+sysmon_class_files/

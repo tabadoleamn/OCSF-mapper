@@ -311,7 +311,7 @@
           "sysmon_collector_logged_time": "$"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "metadata.original_event_uid": {
           "to_string": "$.RecordNumber"
@@ -347,7 +347,7 @@
           "sysmon_utc_time": "$.UtcTime"
         },
         "timezone_offset": {
-          "const": 0
+          "const": 210
         },
         "message": {
           "path": "$.Message"
@@ -388,18 +388,6 @@
         "status": {
           "sysmon_file_status": "$"
         },
-        "actor": {
-          "sysmon_file_actor": "$"
-        },
-        "file": {
-          "sysmon_target_file": "$"
-        },
-        "file_result": {
-          "sysmon_file_result": "$"
-        },
-        "device": {
-          "sysmon_network_device": "$"
-        },
         "action_id": {
           "lookup": "$.EventID",
           "table": {
@@ -412,7 +400,6 @@
             "28": 2,
             "29": 3
           },
-          "if_null": 0,
           "default": 0
         },
         "action": {
@@ -427,7 +414,6 @@
             "28": "Denied",
             "29": "Observed"
           },
-          "if_null": "Unknown",
           "default": "Unknown"
         },
         "disposition_id": {
@@ -442,7 +428,6 @@
             "28": 2,
             "29": 17
           },
-          "if_null": 0,
           "default": 0
         },
         "disposition": {
@@ -457,8 +442,19 @@
             "28": "Blocked",
             "29": "Logged"
           },
-          "if_null": "Unknown",
           "default": "Unknown"
+        },
+        "actor": {
+          "sysmon_file_actor": "$"
+        },
+        "device": {
+          "sysmon_file_device": "$"
+        },
+        "file": {
+          "sysmon_target_file": "$"
+        },
+        "file_result": {
+          "sysmon_file_result": "$"
         }
       }
     },
@@ -507,7 +503,7 @@
           "sysmon_utc_time": "$.UtcTime"
         },
         "timezone_offset": {
-          "const": 0
+          "const": 210
         },
         "message": {
           "path": "$.Message"
@@ -523,7 +519,7 @@
         },
         "class_name": {
           "const": "Network Activity"
-        },
+        },       
         "activity_id": {
           "lookup": "$.EventID",
           "table": {
@@ -570,6 +566,7 @@
         "dst_endpoint": {
           "sysmon_destination_endpoint": "$"
         },
+        
         "connection_info": {
           "sysmon_connection_info": "$"
         },
@@ -584,6 +581,9 @@
         },
         "observation_point": {
           "sysmon_network_observation_point": "$"
+        },
+        "raw_data": {
+          "raw": true
         }
       }
     },
@@ -602,7 +602,7 @@
           "sysmon_collector_logged_time": "$"
         },
         "metadata.uid": {
-          "path": "$.id"
+          "to_string": "$.id"
         },
         "metadata.original_event_uid": {
           "to_string": "$.RecordNumber"
@@ -630,6 +630,15 @@
             "host"
           ]
         },
+        "metadata.extensions": {
+          "const": [
+            {
+              "name": "win",
+              "uid": "2",
+              "version": "1.9.0"
+            }
+          ]
+        },
         "metadata.product.version": {
           "sysmon_service_product_version": "$"
         },
@@ -640,7 +649,7 @@
           "sysmon_utc_time": "$.UtcTime"
         },
         "timezone_offset": {
-          "const": 0
+          "const": 210
         },
         "message": {
           "path": "$.Message"
@@ -676,13 +685,16 @@
           "sysmon_service_severity": "$"
         },
         "status_id": {
-          "sysmon_network_status_id": "$"
+          "sysmon_service_status_id": "$"
         },
         "status": {
-          "sysmon_network_status": "$"
+          "sysmon_service_status": "$"
+        },
+        "status_code": {
+          "sysmon_service_status_code": "$"
         },
         "device": {
-          "sysmon_network_device": "$"
+          "sysmon_service_device": "$"
         },
         "actor": {
           "sysmon_service_actor": "$"
@@ -1085,7 +1097,7 @@
           "sysmon_utc_time": "$.UtcTime"
         },
         "timezone_offset": {
-          "const": 0
+          "const": 210
         },
         "category_uid": {
           "const": 6

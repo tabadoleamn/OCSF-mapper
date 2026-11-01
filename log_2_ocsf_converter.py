@@ -36,11 +36,11 @@ MAPPING_FILE = Path(
 )
 
 INPUT_FILE = Path(
-    r"C:\Users\kooshkestani_m\Desktop\projects\agentic\raw & ocsf logs\raw logs\windows_20260906_0.log"
+    r"C:\Users\kooshkestani_m\Desktop\projects\agentic\main logs\windows\eventId_6.jsonl"
 )
 
 OUTPUT_FILE = Path(
-    r"C:\Users\kooshkestani_m\Desktop\projects\agentic\raw & ocsf logs\ocsf formatted logs\windows_20260906_0_ocsf.log"
+    r"C:\Users\kooshkestani_m\Desktop\projects\agentic\raw & ocsf logs\ocsf formatted logs\eventId_6_ocsf.jsonl"
 )
 mapping_file_name = MAPPING_FILE.stem
 
@@ -88,7 +88,7 @@ def get_sysmon_ocsf_route(
     if event_id == 4:
         return "windows_service_activity"
 
-    if event_id == 6:
+    if event_id == 6:   #SYSMONEVENT_DRIVER_LOAD
         return "kernel_extension_activity"
 
     if event_id == 7:

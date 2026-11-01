@@ -36,11 +36,11 @@ MAPPING_FILE = Path(
 )
 
 INPUT_FILE = Path(
-    r"C:\Users\kooshkestani_m\Desktop\projects\agentic\raw & ocsf logs\raw logs\windows_20260906_0.log"
+    r"C:\Users\kooshkestani_m\Desktop\projects\agentic\main logs\windows\eventId_3.jsonl"
 )
 
 OUTPUT_FILE = Path(
-    r"C:\Users\kooshkestani_m\Desktop\projects\agentic\raw & ocsf logs\ocsf formatted logs\windows_20260906_0_ocsf.log"
+    r"C:\Users\kooshkestani_m\Desktop\projects\agentic\raw & ocsf logs\ocsf formatted logs\eventId_3_ocsf.jsonl"
 )
 mapping_file_name = MAPPING_FILE.stem
 
@@ -50,7 +50,7 @@ mapping_file_name = MAPPING_FILE.stem
 
 # Set only after confirming the collector's timezone. For UTC+03:30 use 210.
 # None omits timezone-less receipt timestamps instead of guessing.
-COLLECTOR_TIMEZONE_OFFSET_MINUTES: int | None = None
+COLLECTOR_TIMEZONE_OFFSET_MINUTES: int | None = 210
 
 CUSTOM_OP_NAMES = set(CUSTOM_OPS)
 
